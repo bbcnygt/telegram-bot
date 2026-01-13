@@ -4,20 +4,20 @@ import feedparser
 import html
 import json
 
+# GitHub Secrets
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 ACCOUNTS = ["yagosabuncuoglu", "FabrizioRomano", "MatteMoretto"]
 
-# Daha geniş ve stabil Nitter instance listesi
+# 2026 Güncel ve Aktif Nitter Örnekleri (GitHub dostu olanlar öncelikli)
 NITTER_INSTANCES = [
     "https://nitter.poast.org",
-    "https://nitter.privacydev.net",
-    "https://nitter.no-logs.com",
-    "https://nitter.projectsegfau.lt",
     "https://nitter.perennialte.ch",
-    "https://nitter.rawbit.ninja",
-    "https://nitter.esmailelbob.xyz",
-    "https://nitter.tinfoil-hat.net"
+    "https://nitter.privacydev.net",
+    "https://nitter.cz",
+    "https://nitter.projectsegfau.lt",
+    "https://nitter.no-logs.com",
+    "https://nitter.dr460nf1r3.org"
 ]
 
 STATE_FILE = "last_tweets.json"
@@ -46,53 +46,56 @@ def check_tweets():
     new_state = last_tweets.copy()
     
     for account in ACCOUNTS:
-        print(f"Kontrol ediliyor: {account}")
+        print(f"--- {account} kontrol ediliyor ---")
         success = False
         
         for instance in NITTER_INSTANCES:
             rss_url = f"{instance}/{account}/rss"
             try:
-                # User-agent ekleyerek bot olduğumuzu gizlemeye çalışıyoruz
-                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-                response = requests.get(rss_url, headers=headers, timeout=15)
+                # GitHub engelini aşmak için tarayıcı gibi davranıyoruz
+                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'}
+                response = requests.get(rss_url, headers=headers, timeout=20)
                 
                 if response.status_code != 200:
+                    print(f"⚠️ {instance} yanıt vermedi (Kod: {response.status_code})")
                     continue
-                    
+                
                 feed = feedparser.parse(response.content)
                 if not feed.entries:
                     continue
                 
-                last_saved_link = last_tweets.get(account)
-                new_entries = []
+                last_link = last_tweets.get(account)
                 
+                # Sadece yeni tweetleri bul
+                new_items = []
                 for entry in feed.entries:
-                    if entry.link == last_saved_link:
+                    if entry.link == last_link:
                         break
-                    new_entries.append(entry)
+                    new_items.append(entry)
                 
-                for entry in reversed(new_entries):
-                    # Linki kullanıcı için Twitter'a çeviriyoruz
-                    clean_link = entry.link
-                    for inst in NITTER_INSTANCES:
-                        clean_link = clean_link.replace(inst.split('//')[1], "twitter.com")
+                # Tweetleri gönder
+                for entry in reversed(new_items):
+                    # Linki Twitter linkine dönüştür
+                    link = entry.link
+                    for n in NITTER_INSTANCES:
+                        link = link.replace(n.split('//')[1], "twitter.com")
                     
-                    msg = f"<b>🔔 @{account}</b>\n\n{html.escape(entry.title)}\n\n<a href='{clean_link}'>Tweeti Görüntüle</a>"
+                    msg = f"<b>🔔 @{account}</b>\n\n{html.escape(entry.title)}\n\n<a href='{link}'>Tweeti Görüntüle</a>"
                     send_telegram_message(msg)
                     new_state[account] = entry.link
+                    print(f"✅ Yeni tweet gönderildi: {account}")
                 
-                if last_saved_link is None and feed.entries:
+                if last_link is None and feed.entries:
                     new_state[account] = feed.entries[0].link
 
-                print(f"✅ {account} başarıyla güncellendi ({instance})")
                 success = True
-                break
+                break # Başarılı olduysa diğer instance'lara bakma
             except Exception as e:
-                print(f"⚠️ {instance} hatası: {e}")
+                print(f"❌ {instance} hatası: {str(e)[:50]}...")
                 continue
         
         if not success:
-            print(f"❌ HATA: {account} verisi hiçbir kaynaktan çekilemedi.")
+            print(f"❗ HATA: {account} hiçbir kaynaktan çekilemedi.")
     
     save_state(new_state)
 
