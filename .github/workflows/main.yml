@@ -1,0 +1,35 @@
+name: Twitter Bot Check
+
+on:
+  schedule:
+    - cron: '*/15 * * * *' # Her 15 dakikada bir çalışır
+  workflow_dispatch: # İstediğinde manuel başlatabilmen için
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Kodu Çek
+        uses: actions/checkout@v3
+
+      - name: Python Kur
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Bağımlılıkları Yükle
+        run: pip install requests feedparser
+
+      - name: Botu Çalıştır
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+        run: python bot.py
+
+      - name: Durumu Kaydet (State)
+        run: |
+          git config --global user.name 'github-actions'
+          git config --global user.email 'github-actions@github.com'
+          git add last_tweets.json
+          git commit -m "Update last seen tweets" || exit 0
+          git push
