@@ -19,14 +19,8 @@ jobs:
         run: pip install requests
       - name: Botu Çalıştır
         env:
+          PYTHONUNBUFFERED: 1 # Logları anında basması için
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
-        run: python bot.py
-      - name: Durumu Kaydet
-        run: |
-          git config --global user.name 'github-actions'
-          git config --global user.email 'github-actions@github.com'
-          git add last_tweets.json || echo "Dosya yok"
-          git commit -m "Update state" || echo "Değişiklik yok"
-          git push || echo "Push yapılamadı"
+        run: python bot.py # Buradaki ismin bot.py olduğundan emin ol
