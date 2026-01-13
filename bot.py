@@ -6,7 +6,7 @@ import json
 # GitHub Secrets
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-RAPID_KEY = os.getenv("RAPIDAPI_KEY")
+BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
 
 ACCOUNTS = ["yagosabuncuoglu", "FabrizioRomano", "MatteMoretto"]
 STATE_FILE = "last_tweets.json"
@@ -27,64 +27,55 @@ def send_telegram(message):
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
     requests.post(url, json=payload, timeout=15)
 
+def get_user_id(username):
+    """Kullanıcı adından ID bulur"""
+    url = f"https://api.twitter.com/2/users/by/username/{username}"
+    headers = {"Authorization": f"Bearer {BEARER_TOKEN}"}
+    res = requests.get(url, headers=headers)
+    return res.json().get("data", {}).get("id")
+
 def check_tweets():
     state = load_state()
     new_state = state.copy()
     is_first_run = state.get("_init", False)
     
-    headers = {
-        "x-rapidapi-key": RAPID_KEY,
-        "x-rapidapi-host": "twitter241.p.rapidapi.com"
-    }
-
-    print(f"🚀 Kontrol başlıyor... (İlk çalışma: {is_first_run})")
+    headers = {"Authorization": f"Bearer {BEARER_TOKEN}"}
 
     for account in ACCOUNTS:
-        print(f"🔎 {account} aranıyor...")
         try:
-            # Daha stabil olan user-tweets endpointini kullanıyoruz
-            url = "https://twitter241.p.rapidapi.com/user-tweets"
-            response = requests.get(url, headers=headers, params={"user": account, "count": "5"}, timeout=30)
-            data = response.json()
+            # 1. Önce kullanıcının sayısal ID'sini alalım
+            user_id = get_user_id(account)
+            if not user_id: continue
 
-            # Tweet listesine ulaşmaya çalış (API yapısı bazen değişebilir)
-            instructions = data.get("result", {}).get("data", {}).get("user", {}).get("result", {}).get("timeline_v2", {}).get("timeline", {}).get("instructions", [])
+            # 2. O ID'ye ait son tweetleri çekelim
+            tweet_url = f"https://api.twitter.com/2/users/{user_id}/tweets"
+            params = {"max_results": 5, "tweet.fields": "text"}
+            res = requests.get(tweet_url, headers=headers, params=params)
             
-            entries = []
-            for instr in instructions:
-                if instr.get("type") == "TimelineAddEntries":
-                    entries = instr.get("entries", [])
-                    break
-            
-            if not entries:
-                print(f"⚠️ {account} için tweet bulunamadı.")
+            if res.status_code == 402:
+                print(f"❌ X API Hatası: Krediniz bu işlem için yetersiz.")
                 continue
 
-            # En güncel tweeti al
-            entry = entries[0]
-            result = entry.get("content", {}).get("itemContent", {}).get("tweet_results", {}).get("result", {})
-            legacy = result.get("legacy") or result.get("tweet", {}).get("legacy", {})
-            tweet_id = result.get("rest_id") or result.get("tweet", {}).get("rest_id")
-            text = legacy.get("full_text", "")
+            tweets = res.json().get("data", [])
+            if not tweets: continue
+
+            latest_tweet = tweets[0]
+            tweet_id = latest_tweet.get("id")
+            text = latest_tweet.get("text")
 
             if tweet_id and (is_first_run or state.get(account) != tweet_id):
                 link = f"https://twitter.com/{account}/status/{tweet_id}"
-                label = "🧪 <b>TEST:</b>\n" if is_first_run else "🔔 "
+                label = "🧪 <b>X API TEST:</b>\n" if is_first_run else "🔔 "
                 msg = f"{label}@{account}\n\n{html.escape(text)}\n\n<a href='{link}'>Görüntüle</a>"
                 
                 send_telegram(msg)
                 new_state[account] = tweet_id
-                print(f"✅ Mesaj gönderildi: {account}")
-                
-                # İlk çalışmada her hesaptan birer tane test mesajı alalım
-                if is_first_run:
-                    continue 
+                if is_first_run: break # İlk seferde 1 mesaj yeter
 
         except Exception as e:
             print(f"❌ {account} hatası: {e}")
 
-    if "_init" in new_state:
-        del new_state["_init"]
+    if "_init" in new_state: del new_state["_init"]
     save_state(new_state)
 
 if __name__ == "__main__":
