@@ -3,21 +3,21 @@ import requests
 import feedparser
 import html
 import json
+import time
 
 # GitHub Secrets
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 ACCOUNTS = ["yagosabuncuoglu", "FabrizioRomano", "MatteMoretto"]
 
-# 2026 Güncel ve Aktif Nitter Örnekleri (GitHub dostu olanlar öncelikli)
-NITTER_INSTANCES = [
-    "https://nitter.poast.org",
-    "https://nitter.perennialte.ch",
-    "https://nitter.privacydev.net",
-    "https://nitter.cz",
-    "https://nitter.projectsegfau.lt",
-    "https://nitter.no-logs.com",
-    "https://nitter.dr460nf1r3.org"
+# Nitter ve RSSHub karışık kaynak listesi (Hangisi çalışırsa)
+SOURCES = [
+    "https://rsshub.app/twitter/user/{account}",
+    "https://rsshub.moeyy.cn/twitter/user/{account}",
+    "https://nitter.poast.org/{account}/rss",
+    "https://nitter.perennialte.ch/{account}/rss",
+    "https://rsshub.rss.geek.edu.pl/twitter/user/{account}",
+    "https://nitter.privacydev.net/{account}/rss"
 ]
 
 STATE_FILE = "last_tweets.json"
@@ -37,7 +37,7 @@ def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
     try:
-        requests.post(url, json=payload, timeout=10)
+        requests.post(url, json=payload, timeout=15)
     except:
         pass
 
@@ -46,18 +46,17 @@ def check_tweets():
     new_state = last_tweets.copy()
     
     for account in ACCOUNTS:
-        print(f"--- {account} kontrol ediliyor ---")
+        print(f"🔎 {account} aranıyor...")
         success = False
         
-        for instance in NITTER_INSTANCES:
-            rss_url = f"{instance}/{account}/rss"
+        for source_template in SOURCES:
+            url = source_template.format(account=account)
             try:
-                # GitHub engelini aşmak için tarayıcı gibi davranıyoruz
+                # Bazı RSSHub'lar bot koruması için User-Agent ister
                 headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'}
-                response = requests.get(rss_url, headers=headers, timeout=20)
+                response = requests.get(url, headers=headers, timeout=25)
                 
                 if response.status_code != 200:
-                    print(f"⚠️ {instance} yanıt vermedi (Kod: {response.status_code})")
                     continue
                 
                 feed = feedparser.parse(response.content)
@@ -65,37 +64,37 @@ def check_tweets():
                     continue
                 
                 last_link = last_tweets.get(account)
+                new_entries = []
                 
-                # Sadece yeni tweetleri bul
-                new_items = []
                 for entry in feed.entries:
                     if entry.link == last_link:
                         break
-                    new_items.append(entry)
+                    new_entries.append(entry)
                 
-                # Tweetleri gönder
-                for entry in reversed(new_items):
-                    # Linki Twitter linkine dönüştür
-                    link = entry.link
-                    for n in NITTER_INSTANCES:
-                        link = link.replace(n.split('//')[1], "twitter.com")
+                # Yeni tweetleri gönder
+                for entry in reversed(new_entries):
+                    # Linki son kullanıcı için her zaman twitter.com yapalım
+                    clean_link = entry.link
+                    # Eğer link nitter veya rsshub içeriyorsa twitter.com ile değiştir
+                    if "twitter.com" not in clean_link:
+                        # Bu kısım basit bir temizlik yapar
+                        clean_link = f"https://twitter.com/{account}/status/{entry.link.split('/')[-1]}"
                     
-                    msg = f"<b>🔔 @{account}</b>\n\n{html.escape(entry.title)}\n\n<a href='{link}'>Tweeti Görüntüle</a>"
+                    msg = f"<b>🔔 @{account}</b>\n\n{html.escape(entry.title)}\n\n<a href='{clean_link}'>Tweeti Görüntüle</a>"
                     send_telegram_message(msg)
                     new_state[account] = entry.link
-                    print(f"✅ Yeni tweet gönderildi: {account}")
                 
                 if last_link is None and feed.entries:
                     new_state[account] = feed.entries[0].link
 
+                print(f"✅ {account} bilgisi alındı: {url}")
                 success = True
-                break # Başarılı olduysa diğer instance'lara bakma
-            except Exception as e:
-                print(f"❌ {instance} hatası: {str(e)[:50]}...")
+                break 
+            except:
                 continue
         
         if not success:
-            print(f"❗ HATA: {account} hiçbir kaynaktan çekilemedi.")
+            print(f"❌ {account} için hiçbir kaynak çalışmadı.")
     
     save_state(new_state)
 
