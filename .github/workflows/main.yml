@@ -2,7 +2,7 @@ name: Twitter Bot Check
 
 on:
   schedule:
-    - cron: '0 7,13,19 * * *' # TSİ 10:00, 16:00, 22:00
+    - cron: '0 7,13,19 * * *'
   workflow_dispatch:
 
 jobs:
@@ -11,27 +11,22 @@ jobs:
     steps:
       - name: Kodu Çek
         uses: actions/checkout@v3
-
       - name: Python Kur
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-
       - name: Bağımlılıkları Yükle
         run: pip install requests
-
       - name: Botu Çalıştır
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
-          RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
+          TWITTER_BEARER_TOKEN: ${{ secrets.TWITTER_BEARER_TOKEN }}
         run: python bot.py
-
       - name: Durumu Kaydet
         run: |
           git config --global user.name 'github-actions'
           git config --global user.email 'github-actions@github.com'
-          # HATA DÜZELTMESİ: Dosya yoksa bile hata vermeden geçer (image_62e62a.png için)
-          git add last_tweets.json || echo "Dosya yok, sorun değil."
-          git commit -m "Update state" || echo "Değişiklik yok."
-          git push || echo "Push yapılamadı."
+          git add last_tweets.json || echo "Dosya yok"
+          git commit -m "Update state" || echo "Değişiklik yok"
+          git push || echo "Push yapılamadı"
