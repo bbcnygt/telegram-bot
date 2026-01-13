@@ -6,7 +6,7 @@ import json
 # GitHub Secrets
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-RAPID_KEY = os.getenv("RAPIDAPI_KEY")
+BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN")
 
 ACCOUNTS = ["yagosabuncuoglu", "FabrizioRomano", "MatteMoretto"]
 STATE_FILE = "last_tweets.json"
@@ -30,55 +30,58 @@ def send_telegram(message):
 def check_tweets():
     last_tweets = load_state()
     new_state = last_tweets.copy()
+    is_first_run = len(last_tweets) == 0
 
-    # KREDİ TASARRUFU: 3 hesabı tek bir 'Search' isteği ile kontrol ediyoruz (1 istek = 1 kredi)
-    url = "https://twitter241.p.rapidapi.com/search"
-    query = "(" + " OR ".join([f"from:{acc}" for acc in ACCOUNTS]) + ")"
+    # Twitter v2 Search Endpoint
+    search_url = "https://api.twitter.com/2/tweets/search/recent"
+    query = "(" + " OR ".join([f"from:{acc}" for acc in ACCOUNTS]) + ") -is:retweet"
     
     headers = {
-        "x-rapidapi-key": RAPID_KEY,
-        "x-rapidapi-host": "twitter241.p.rapidapi.com"
+        "Authorization": f"Bearer {BEARER_TOKEN}",
+        "User-Agent": "v2RecentSearchPython"
     }
     
     params = {
         "query": query,
-        "type": "Latest",
-        "count": "20"
+        "max_results": 10,
+        "tweet.fields": "author_id,text",
+        "expansions": "author_id",
+        "user.fields": "username"
     }
 
     try:
-        print(f"Sorgulanıyor: {query}")
-        response = requests.get(url, headers=headers, params=params, timeout=30)
+        response = requests.get(search_url, headers=headers, params=params)
+        if response.status_code != 200:
+            print(f"Hata: {response.status_code} - {response.text}")
+            return
+
         data = response.json()
-        
-        # API'nin tweet listesini tuttuğu yeri bulalım (Twitter241 standart yapısı)
-        # Not: API yapısına göre buradaki 'result' anahtarları değişebilir.
-        instructions = data.get("result", {}).get("data", {}).get("search_by_raw_query", {}).get("search_timeline", {}).get("timeline", {}).get("instructions", [])
-        
-        entries = []
-        for instr in instructions:
-            if instr.get("type") == "TimelineAddEntries":
-                entries = instr.get("entries", [])
-                break
-        
-        for entry in reversed(entries):
-            content = entry.get("content", {}).get("itemContent", {}).get("tweet_results", {}).get("result", {})
-            if not content: continue
-            
-            tweet_id = content.get("rest_id")
-            legacy = content.get("legacy", {})
-            tweet_text = legacy.get("full_text", "")
-            screen_name = content.get("core", {}).get("user_results", {}).get("result", {}).get("legacy", {}).get("screen_name")
-            
-            if tweet_id and screen_name in ACCOUNTS and last_tweets.get(screen_name) != tweet_id:
+        tweets = data.get("data", [])
+        users = {u["id"]: u["username"] for u in data.get("includes", {}).get("users", [])}
+
+        found_new = False
+        # Tweetleri eskiden yeniye doğru işle
+        for tweet in reversed(tweets):
+            author_id = tweet.get("author_id")
+            screen_name = users.get(author_id)
+            tweet_id = tweet.get("id")
+            tweet_text = tweet.get("text")
+
+            # İlk çalışma ise veya yeni tweet ise gönder
+            if screen_name in ACCOUNTS and (is_first_run or last_tweets.get(screen_name) != tweet_id):
                 link = f"https://twitter.com/{screen_name}/status/{tweet_id}"
-                msg = f"<b>🔔 @{screen_name}</b>\n\n{html.escape(tweet_text)}\n\n<a href='{link}'>Tweeti Görüntüle</a>"
+                prefix = "🧪 <b>İLK TEST MESAJI:</b>\n" if is_first_run else "🔔 "
+                msg = f"{prefix}@{screen_name}\n\n{html.escape(tweet_text)}\n\n<a href='{link}'>Tweeti Görüntüle</a>"
                 send_telegram(msg)
                 new_state[screen_name] = tweet_id
-                print(f"✅ Yeni tweet gönderildi: {screen_name}")
+                found_new = True
+                if is_first_run: break # İlk çalışmada sadece 1 tane test mesajı at
+
+        if not found_new:
+            print("Yeni tweet bulunamadı.")
 
     except Exception as e:
-        print(f"❌ API Hatası: {e}")
+        print(f"❌ Hata: {e}")
     
     save_state(new_state)
 
