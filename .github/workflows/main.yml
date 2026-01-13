@@ -2,7 +2,7 @@ name: Twitter Bot Check
 
 on:
   schedule:
-    - cron: '0 7,13,19 * * *' # TSİ 10:00, 16:00, 22:00
+    - cron: '0 7,13,19 * * *' # TSİ 10:00, 16:00, 22:00 (UTC+3)
   workflow_dispatch:
 
 jobs:
@@ -19,7 +19,6 @@ jobs:
         run: pip install requests
       - name: Botu Çalıştır
         env:
-          PYTHONUNBUFFERED: 1
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
@@ -30,4 +29,4 @@ jobs:
           git config --global user.email 'github-actions@github.com'
           git add last_tweets.json || echo "Dosya yok"
           git commit -m "Update state" || echo "Değişiklik yok"
-          git push || echo "Hata oluştu"
+          git push || echo "Hata"
