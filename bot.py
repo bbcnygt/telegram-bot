@@ -25,16 +25,16 @@ def save_state(state):
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
-    requests.post(url, json=payload, timeout=15)
+    try:
+        r = requests.post(url, json=payload, timeout=15)
+        print(f"Telegram Yanıtı: {r.status_code}")
+    except Exception as e:
+        print(f"Telegram Hatası: {e}")
 
 def check_tweets():
     last_tweets = load_state()
     new_state = last_tweets.copy()
-    is_first_run = len(last_tweets) == 0
-
-    # Her durumda dosyayı oluştur (GitHub Actions hatasını engellemek için)
-    if is_first_run:
-        save_state({"status": "init"})
+    is_first_run = len(last_tweets) == 0 # Eğer dosya yoksa/boşsa True olur
 
     url = "https://twitter241.p.rapidapi.com/search"
     query = "(" + " OR ".join([f"from:{acc}" for acc in ACCOUNTS]) + ")"
@@ -43,14 +43,14 @@ def check_tweets():
         "x-rapidapi-key": RAPID_KEY,
         "x-rapidapi-host": "twitter241.p.rapidapi.com"
     }
-    params = {"query": query, "type": "Latest", "count": "10"}
+    params = {"query": query, "type": "Latest", "count": "5"}
 
     try:
-        print(f"Sorgulanıyor: {query}")
+        print(f"🔎 Sorgulanıyor: {query}")
         response = requests.get(url, headers=headers, params=params, timeout=30)
         data = response.json()
         
-        # Tweetleri ayıklama
+        # API verisini ayıkla
         instructions = data.get("result", {}).get("data", {}).get("search_by_raw_query", {}).get("search_timeline", {}).get("timeline", {}).get("instructions", [])
         
         entries = []
@@ -59,31 +59,39 @@ def check_tweets():
                 entries = instr.get("entries", [])
                 break
         
-        if not entries and is_first_run:
-            send_telegram("✅ <b>Bağlantı Kuruldu!</b>\n\nŞu an takip ettiğin hesaplardan yeni tweet yok ancak botun tıkır tıkır çalışıyor. Tweet atıldığında buraya düşecek.")
+        if not entries:
+            print("⚠️ API'den hiç tweet dönmedi.")
             return
 
-        found_new = False
-        for entry in reversed(entries):
+        # İlk çalışmada sadece en son 1 tanesini at, normalde tüm yenileri at
+        tweets_to_process = [entries[0]] if is_first_run else reversed(entries)
+
+        for entry in tweets_to_process:
             content = entry.get("content", {}).get("itemContent", {}).get("tweet_results", {}).get("result", {})
             if not content: continue
             
+            # Bazı tweetler 'tweet' anahtarı altında olabiliyor
+            if "legacy" not in content and "tweet" in content:
+                content = content["tweet"]
+
             tweet_id = content.get("rest_id")
             legacy = content.get("legacy", {})
             tweet_text = legacy.get("full_text", "")
             screen_name = content.get("core", {}).get("user_results", {}).get("result", {}).get("legacy", {}).get("screen_name")
             
-            if tweet_id and screen_name in ACCOUNTS and last_tweets.get(screen_name) != tweet_id:
+            if not screen_name: continue
+
+            # Mesaj gönderme mantığı
+            if is_first_run or (tweet_id and last_tweets.get(screen_name) != tweet_id):
                 link = f"https://twitter.com/{screen_name}/status/{tweet_id}"
-                msg = f"🔔 @{screen_name}\n\n{html.escape(tweet_text)}\n\n<a href='{link}'>Tweeti Görüntüle</a>"
+                label = "🧪 <b>İLK KONTROL MESAJI</b>\n" if is_first_run else "🔔 "
+                msg = f"{label}@{screen_name}\n\n{html.escape(tweet_text)}\n\n<a href='{link}'>Tweeti Görüntüle</a>"
+                
                 send_telegram(msg)
                 new_state[screen_name] = tweet_id
-                found_new = True
-
-        if not found_new:
-            print("Yeni tweet yok.")
-            if is_first_run:
-                send_telegram("✅ <b>Bot Aktif!</b>\nAPI bağlantısı tamam. İlk tweet bekleniyor...")
+                print(f"✅ Mesaj iletildi: {screen_name}")
+                
+                if is_first_run: break # İlk seferde tek mesaj yeterli
 
     except Exception as e:
         print(f"❌ Hata: {e}")
