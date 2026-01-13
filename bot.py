@@ -3,11 +3,24 @@ import requests
 import html
 import json
 
+# GitHub Secrets
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
 RAPID_KEY = os.getenv("RAPIDAPI_KEY")
 
-ACCOUNT = "yagosabuncuoglu"
+ACCOUNTS = ["yagosabuncuoglu", "FabrizioRomano", "MatteMoretto"]
+STATE_FILE = "last_tweets.json"
+
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r") as f:
+            try: return json.load(f)
+            except: return {}
+    return {"_first_run": True}
+
+def save_state(state):
+    with open(STATE_FILE, "w") as f:
+        json.dump(state, f, indent=4)
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -15,72 +28,59 @@ def send_telegram(message):
     requests.post(url, json=payload, timeout=15)
 
 def check_tweets():
-    print("🚀 Sorgu gönderiliyor...")
+    state = load_state()
+    new_state = state.copy()
+    is_first_run = state.get("_first_run", False)
     
     headers = {
         "x-rapidapi-key": RAPID_KEY,
         "x-rapidapi-host": "twitter241.p.rapidapi.com"
     }
-    
-    # Search yerine bazen daha stabil olan 'user-tweets' de denenebilir 
-    # Ama 404 aldığına göre 'search' ile devam ediyoruz, sadece parametreleri sıkılaştırıyoruz.
-    url = "https://twitter241.p.rapidapi.com/search"
-    params = {"query": f"from:{ACCOUNT}", "type": "Latest", "count": "10"}
 
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=30)
-        data = response.json()
-        
-        # Loglarda verinin yapısını görelim
-        print(f"📡 API Yanıt Anahtarları: {list(data.keys())}")
-        
-        # Tweetleri bulmak için farklı yolları dene
-        entries = []
+    for account in ACCOUNTS:
+        print(f"🔎 {account} kontrol ediliyor...")
         try:
-            # Yol 1: Standart Search yolu
-            instructions = data.get("result", {}).get("data", {}).get("search_by_raw_query", {}).get("search_timeline", {}).get("timeline", {}).get("instructions", [])
+            url = "https://twitter241.p.rapidapi.com/search"
+            params = {"query": f"from:{account}", "type": "Latest", "count": "5"}
+            response = requests.get(url, headers=headers, params=params, timeout=30)
+            data = response.json()
+
+            # LOGLARINA GÖRE DÜZELTİLEN YOL:
+            instructions = data.get("result", {}).get("timeline", {}).get("instructions", [])
+            
+            entries = []
             for instr in instructions:
                 if instr.get("type") == "TimelineAddEntries":
                     entries = instr.get("entries", [])
                     break
-        except:
-            pass
-
-        if not entries:
-            # Yol 2: Alternatif yapı (Bazı API güncellemeleri için)
-            try:
-                entries = data.get("data", {}).get("search_by_raw_query", {}).get("search_timeline", {}).get("timeline", {}).get("instructions", [{}])[0].get("entries", [])
-            except:
-                pass
-
-        if not entries:
-            print(f"⚠️ Veri ayıklanamadı. Ham veri (ilk 300 harf): {str(data)[:300]}")
-            send_telegram("⚠️ API bağlandı ama tweetler ayıklanamadı. Logları kontrol et!")
-            return
-
-        found_any = False
-        for entry in entries:
-            if "tweet-" not in entry.get("entryId", ""): continue
             
-            # Tweet içeriğine sızalım
-            res = entry.get("content", {}).get("itemContent", {}).get("tweet_results", {}).get("result", {})
-            legacy = res.get("legacy") or res.get("tweet", {}).get("legacy", {})
-            t_id = res.get("rest_id") or res.get("tweet", {}).get("rest_id")
-            text = legacy.get("full_text", "")
+            if not entries: continue
 
-            if t_id and text:
-                link = f"https://twitter.com/{ACCOUNT}/status/{t_id}"
-                msg = f"🔔 <b>YENİ TWEET YAKALANDI!</b>\n\n@{ACCOUNT}: {html.escape(text)}\n\n<a href='{link}'>Görüntüle</a>"
-                send_telegram(msg)
-                print(f"✅ Tweet iletildi: {t_id}")
-                found_any = True
-                break # Şimdilik sadece en sonuncuyu atması yeterli
+            for entry in entries:
+                if "tweet-" not in entry.get("entryId", ""): continue
+                
+                # Tweet detaylarını çek
+                item = entry.get("content", {}).get("itemContent", {}).get("tweet_results", {}).get("result", {})
+                legacy = item.get("legacy") or item.get("tweet", {}).get("legacy", {})
+                t_id = item.get("rest_id") or item.get("tweet", {}).get("rest_id")
+                text = legacy.get("full_text", "")
 
-        if not found_any:
-            print("⚠️ Entry bulundu ama tweet içeriği boş.")
+                if t_id and (is_first_run or state.get(account) != t_id):
+                    link = f"https://twitter.com/{account}/status/{t_id}"
+                    label = "🧪 <b>İLK KONTROL:</b>\n" if is_first_run else "🔔 "
+                    msg = f"{label}@{account}\n\n{html.escape(text)}\n\n<a href='{link}'>Görüntüle</a>"
+                    
+                    send_telegram(msg)
+                    new_state[account] = t_id
+                    print(f"✅ Gönderildi: {account}")
+                    if is_first_run: break # İlk çalışmada her hesaptan 1 tane al
 
-    except Exception as e:
-        print(f"❌ Hata: {e}")
+        except Exception as e:
+            print(f"❌ {account} hatası: {e}")
+
+    if "_first_run" in new_state:
+        del new_state["_first_run"]
+    save_state(new_state)
 
 if __name__ == "__main__":
     check_tweets()
