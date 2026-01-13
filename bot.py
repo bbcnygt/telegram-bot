@@ -16,7 +16,7 @@ def load_state():
         with open(STATE_FILE, "r") as f:
             try: return json.load(f)
             except: return {}
-    return {"init": True} # Dosya yoksa başlangıç değeri ver
+    return {"_init": True}
 
 def save_state(state):
     with open(STATE_FILE, "w") as f:
@@ -27,60 +27,64 @@ def send_telegram(message):
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
     requests.post(url, json=payload, timeout=15)
 
-def get_tweets_for_user(username):
-    """Tek bir kullanıcı için son tweetleri çeker"""
-    url = "https://twitter241.p.rapidapi.com/user-tweets"
-    headers = {"x-rapidapi-key": RAPID_KEY, "x-rapidapi-host": "twitter241.p.rapidapi.com"}
-    params = {"user": username, "count": "5"}
-    try:
-        res = requests.get(url, headers=headers, params=params, timeout=30)
-        instructions = res.json().get("result", {}).get("data", {}).get("user", {}).get("result", {}).get("timeline_v2", {}).get("timeline", {}).get("instructions", [])
-        for instr in instructions:
-            if instr.get("type") == "TimelineAddEntries":
-                return instr.get("entries", [])
-    except: return []
-    return []
-
 def check_tweets():
-    last_tweets = load_state()
-    new_state = last_tweets.copy()
-    is_first_run = "init" in last_tweets
-
-    print(f"🔄 Kontrol başlıyor... (İlk çalışma: {is_first_run})")
+    state = load_state()
+    new_state = state.copy()
+    is_first_run = state.get("_init", False)
     
-    # En az bir mesaj gelmesi için her hesaba tek tek bakalım (Daha garantidir)
+    headers = {
+        "x-rapidapi-key": RAPID_KEY,
+        "x-rapidapi-host": "twitter241.p.rapidapi.com"
+    }
+
+    print(f"🚀 Kontrol başlıyor... (İlk çalışma: {is_first_run})")
+
     for account in ACCOUNTS:
-        print(f"🔎 {account} kontrol ediliyor...")
-        entries = get_tweets_for_user(account)
-        
-        if not entries:
-            print(f"⚠️ {account} için veri alınamadı.")
-            continue
+        print(f"🔎 {account} aranıyor...")
+        try:
+            # Daha stabil olan user-tweets endpointini kullanıyoruz
+            url = "https://twitter241.p.rapidapi.com/user-tweets"
+            response = requests.get(url, headers=headers, params={"user": account, "count": "5"}, timeout=30)
+            data = response.json()
 
-        # En son tweeti al
-        entry = entries[0]
-        content = entry.get("content", {}).get("itemContent", {}).get("tweet_results", {}).get("result", {})
-        if not content: continue
-        
-        # Tweet verisine ulaş (v2 yapısı)
-        legacy = content.get("legacy") or content.get("tweet", {}).get("legacy", {})
-        tweet_id = content.get("rest_id") or content.get("tweet", {}).get("rest_id")
-        tweet_text = legacy.get("full_text", "")
-        
-        if tweet_id and (is_first_run or last_tweets.get(account) != tweet_id):
-            link = f"https://twitter.com/{account}/status/{tweet_id}"
-            prefix = "🧪 <b>KONTROL MESAJI:</b>\n" if is_first_run else "🔔 "
-            msg = f"{prefix}@{account}\n\n{html.escape(tweet_text)}\n\n<a href='{link}'>Tweeti Görüntüle</a>"
+            # Tweet listesine ulaşmaya çalış (API yapısı bazen değişebilir)
+            instructions = data.get("result", {}).get("data", {}).get("user", {}).get("result", {}).get("timeline_v2", {}).get("timeline", {}).get("instructions", [])
             
-            send_telegram(msg)
-            new_state[account] = tweet_id
-            print(f"✅ Mesaj gönderildi: {account}")
+            entries = []
+            for instr in instructions:
+                if instr.get("type") == "TimelineAddEntries":
+                    entries = instr.get("entries", [])
+                    break
             
-            # İlk çalışmada sadece 1 tane mesaj atıp hafızayı güncellemesi yeterli
-            if is_first_run: 
-                new_state.pop("init", None)
-                break 
+            if not entries:
+                print(f"⚠️ {account} için tweet bulunamadı.")
+                continue
 
+            # En güncel tweeti al
+            entry = entries[0]
+            result = entry.get("content", {}).get("itemContent", {}).get("tweet_results", {}).get("result", {})
+            legacy = result.get("legacy") or result.get("tweet", {}).get("legacy", {})
+            tweet_id = result.get("rest_id") or result.get("tweet", {}).get("rest_id")
+            text = legacy.get("full_text", "")
+
+            if tweet_id and (is_first_run or state.get(account) != tweet_id):
+                link = f"https://twitter.com/{account}/status/{tweet_id}"
+                label = "🧪 <b>TEST:</b>\n" if is_first_run else "🔔 "
+                msg = f"{label}@{account}\n\n{html.escape(text)}\n\n<a href='{link}'>Görüntüle</a>"
+                
+                send_telegram(msg)
+                new_state[account] = tweet_id
+                print(f"✅ Mesaj gönderildi: {account}")
+                
+                # İlk çalışmada her hesaptan birer tane test mesajı alalım
+                if is_first_run:
+                    continue 
+
+        except Exception as e:
+            print(f"❌ {account} hatası: {e}")
+
+    if "_init" in new_state:
+        del new_state["_init"]
     save_state(new_state)
 
 if __name__ == "__main__":
