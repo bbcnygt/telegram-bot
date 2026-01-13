@@ -1,25 +1,14 @@
 import os
 import requests
-import feedparser
 import html
 import json
-import time
 
 # GitHub Secrets
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+RAPID_KEY = os.getenv("RAPIDAPI_KEY")
+
 ACCOUNTS = ["yagosabuncuoglu", "FabrizioRomano", "MatteMoretto"]
-
-# Nitter ve RSSHub karışık kaynak listesi (Hangisi çalışırsa)
-SOURCES = [
-    "https://rsshub.app/twitter/user/{account}",
-    "https://rsshub.moeyy.cn/twitter/user/{account}",
-    "https://nitter.poast.org/{account}/rss",
-    "https://nitter.perennialte.ch/{account}/rss",
-    "https://rsshub.rss.geek.edu.pl/twitter/user/{account}",
-    "https://nitter.privacydev.net/{account}/rss"
-]
-
 STATE_FILE = "last_tweets.json"
 
 def load_state():
@@ -33,68 +22,63 @@ def save_state(state):
     with open(STATE_FILE, "w") as f:
         json.dump(state, f, indent=4)
 
-def send_telegram_message(message):
+def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "HTML"}
-    try:
-        requests.post(url, json=payload, timeout=15)
-    except:
-        pass
+    requests.post(url, json=payload, timeout=15)
 
 def check_tweets():
     last_tweets = load_state()
     new_state = last_tweets.copy()
-    
-    for account in ACCOUNTS:
-        print(f"🔎 {account} aranıyor...")
-        success = False
-        
-        for source_template in SOURCES:
-            url = source_template.format(account=account)
-            try:
-                # Bazı RSSHub'lar bot koruması için User-Agent ister
-                headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0'}
-                response = requests.get(url, headers=headers, timeout=25)
-                
-                if response.status_code != 200:
-                    continue
-                
-                feed = feedparser.parse(response.content)
-                if not feed.entries:
-                    continue
-                
-                last_link = last_tweets.get(account)
-                new_entries = []
-                
-                for entry in feed.entries:
-                    if entry.link == last_link:
-                        break
-                    new_entries.append(entry)
-                
-                # Yeni tweetleri gönder
-                for entry in reversed(new_entries):
-                    # Linki son kullanıcı için her zaman twitter.com yapalım
-                    clean_link = entry.link
-                    # Eğer link nitter veya rsshub içeriyorsa twitter.com ile değiştir
-                    if "twitter.com" not in clean_link:
-                        # Bu kısım basit bir temizlik yapar
-                        clean_link = f"https://twitter.com/{account}/status/{entry.link.split('/')[-1]}"
-                    
-                    msg = f"<b>🔔 @{account}</b>\n\n{html.escape(entry.title)}\n\n<a href='{clean_link}'>Tweeti Görüntüle</a>"
-                    send_telegram_message(msg)
-                    new_state[account] = entry.link
-                
-                if last_link is None and feed.entries:
-                    new_state[account] = feed.entries[0].link
 
-                print(f"✅ {account} bilgisi alındı: {url}")
-                success = True
-                break 
-            except:
-                continue
+    # KREDİ TASARRUFU: 3 hesabı tek bir 'Search' isteği ile kontrol ediyoruz (1 istek = 1 kredi)
+    url = "https://twitter241.p.rapidapi.com/search"
+    query = "(" + " OR ".join([f"from:{acc}" for acc in ACCOUNTS]) + ")"
+    
+    headers = {
+        "x-rapidapi-key": RAPID_KEY,
+        "x-rapidapi-host": "twitter241.p.rapidapi.com"
+    }
+    
+    params = {
+        "query": query,
+        "type": "Latest",
+        "count": "20"
+    }
+
+    try:
+        print(f"Sorgulanıyor: {query}")
+        response = requests.get(url, headers=headers, params=params, timeout=30)
+        data = response.json()
         
-        if not success:
-            print(f"❌ {account} için hiçbir kaynak çalışmadı.")
+        # API'nin tweet listesini tuttuğu yeri bulalım (Twitter241 standart yapısı)
+        # Not: API yapısına göre buradaki 'result' anahtarları değişebilir.
+        instructions = data.get("result", {}).get("data", {}).get("search_by_raw_query", {}).get("search_timeline", {}).get("timeline", {}).get("instructions", [])
+        
+        entries = []
+        for instr in instructions:
+            if instr.get("type") == "TimelineAddEntries":
+                entries = instr.get("entries", [])
+                break
+        
+        for entry in reversed(entries):
+            content = entry.get("content", {}).get("itemContent", {}).get("tweet_results", {}).get("result", {})
+            if not content: continue
+            
+            tweet_id = content.get("rest_id")
+            legacy = content.get("legacy", {})
+            tweet_text = legacy.get("full_text", "")
+            screen_name = content.get("core", {}).get("user_results", {}).get("result", {}).get("legacy", {}).get("screen_name")
+            
+            if tweet_id and screen_name in ACCOUNTS and last_tweets.get(screen_name) != tweet_id:
+                link = f"https://twitter.com/{screen_name}/status/{tweet_id}"
+                msg = f"<b>🔔 @{screen_name}</b>\n\n{html.escape(tweet_text)}\n\n<a href='{link}'>Tweeti Görüntüle</a>"
+                send_telegram(msg)
+                new_state[screen_name] = tweet_id
+                print(f"✅ Yeni tweet gönderildi: {screen_name}")
+
+    except Exception as e:
+        print(f"❌ API Hatası: {e}")
     
     save_state(new_state)
 
